@@ -1,8 +1,8 @@
-# Parallel File Processing System — Bug Fixes & Code Walkthrough
+# ExecutorService — Parallel File Processing Walkthrough
 
-A Java 21 / Maven learning lab for `ExecutorService`. This document records the bugs that were
-fixed in `App.java`, then explains every class in the project along with its **actual** output
-(each snippet below was captured by compiling and running the code, not written from memory).
+A Java 21 / Maven learning lab for `ExecutorService`. This document explains every class in the
+project along with its **actual** output (each snippet below was captured by compiling and running
+the code, not written from memory).
 
 - **JDK:** 21.0.10 LTS
 - **Maven:** 3.9.10
@@ -12,116 +12,21 @@ fixed in `App.java`, then explains every class in the project along with its **a
 
 ## Table of Contents
 
-1. [Bugs Fixed in App.java](#1-bugs-fixed-in-appjava)
-2. [How to Build and Run](#2-how-to-build-and-run)
-3. [The Core Pipeline](#3-the-core-pipeline)
-   - [App.java](#31-appjava)
-   - [FileTask.java](#32-filetaskjava)
-   - [FileResult.java](#33-fileresultjava)
-   - [FileAnalyzer.java](#34-fileanalyzerjava)
-4. [Basic Examples](#4-basic-examples)
-5. [Thread Pool Types](#5-thread-pool-types)
-6. [Advanced Patterns](#6-advanced-patterns)
-7. [Concepts Cheat Sheet](#7-concepts-cheat-sheet)
-8. [Remaining Observations (not changed)](#8-remaining-observations-not-changed)
+1. [How to Build and Run](#1-how-to-build-and-run)
+2. [The Core Pipeline](#2-the-core-pipeline)
+   - [App.java](#21-appjava)
+   - [FileTask.java](#22-filetaskjava)
+   - [FileResult.java](#23-fileresultjava)
+   - [FileAnalyzer.java](#24-fileanalyzerjava)
+3. [Basic Examples](#3-basic-examples)
+4. [Thread Pool Types](#4-thread-pool-types)
+5. [Advanced Patterns](#5-advanced-patterns)
+6. [Concepts Cheat Sheet](#6-concepts-cheat-sheet)
+7. [Code Observations](#7-code-observations)
 
 ---
 
-## 1. Bugs Fixed in App.java
-
-The project did not compile. `javac` reported:
-
-```
-src\main\java\com\amith\executor\App.java:9: error: cannot find symbol
-        FileAnalyzer analyzer = new FileAnalyzer(4);
-        ^
-  symbol:   class FileAnalyzer
-  location: class App
-src\main\java\com\amith\executor\App.java:9: error: cannot find symbol
-        FileAnalyzer analyzer = new FileAnalyzer(4);
-                                    ^
-  symbol:   class FileAnalyzer
-  location: class App
-2 errors
-```
-
-### Bug #1 — Missing import (`cannot find symbol: class FileAnalyzer`)
-
-`App` lives in package `com.amith.executor`, but `FileAnalyzer` lives in the **sub-package**
-`com.amith.executor.tasks`.
-
-Java does **not** import sub-packages implicitly. A class gets unqualified access only to types in
-its *own* package (plus `java.lang`). `com.amith.executor.tasks` is a completely separate package
-as far as the compiler is concerned — the dotted name implies no parent/child relationship at the
-language level. So the simple name `FileAnalyzer` was unresolvable.
-
-**Fix** — add the explicit import:
-
-```java
-import com.amith.executor.tasks.FileAnalyzer;
-```
-
-### Bug #2 — Unhandled checked exception
-
-`FileAnalyzer.run()` is declared as:
-
-```java
-public void run() throws Exception { ... }
-```
-
-It must be, because it calls two methods that throw checked exceptions:
-
-| Call | Checked exception thrown |
-| --- | --- |
-| `future.get()` | `InterruptedException`, `ExecutionException` |
-| `executor.awaitTermination(...)` | `InterruptedException` |
-
-`App.main` called `analyzer.run()` inside a `main` declared as plain
-`public static void main(String[] args)` — no `throws`, no `try/catch`. Under Java's
-*catch-or-specify* rule this is a compile error:
-
-```
-unreported exception java.lang.Exception; must be caught or declared to be thrown
-```
-
-This error was **masked** by Bug #1: once the type `FileAnalyzer` fails to resolve, the compiler
-cannot determine the signature of `.run()`, so it never gets to the exception check. Fixing only
-the import would have surfaced this as a second round of errors.
-
-**Fix** — propagate it from `main`:
-
-```java
-public static void main(String[] args) throws Exception {
-```
-
-Letting it escape `main` is the right call for a learning lab: an exception becomes a visible stack
-trace on stderr and a non-zero exit code, rather than being silently swallowed by a `catch` block.
-
-### The diff
-
-```diff
-  package com.amith.executor;
-
-+ import com.amith.executor.tasks.FileAnalyzer;
-+
-  public class App {
--     public static void main(String[] args) {
-+     public static void main(String[] args) throws Exception {
-          System.out.println("=========================");
-```
-
-### Verification
-
-```
-$ javac -d out $(find src/main/java -name '*.java')
-COMPILE OK
-```
-
-Both errors are gone and the application runs end-to-end (output in [§3.1](#31-appjava)).
-
----
-
-## 2. How to Build and Run
+## 1. How to Build and Run
 
 ```bash
 cd executor-learning
@@ -137,7 +42,7 @@ java -cp out com.amith.executor.App
 
 ---
 
-## 3. The Core Pipeline
+## 2. The Core Pipeline
 
 This is the part `App` actually exercises. Flow:
 
@@ -159,7 +64,7 @@ App.main
          └─ shutdown() + awaitTermination(10s)
 ```
 
-### 3.1 `App.java`
+### 2.1 `App.java`
 
 The entry point. Prints a banner, builds a `FileAnalyzer` with a 4-thread pool, runs it, prints a
 closing line.
@@ -188,8 +93,8 @@ public class App {
 
 | Line | What it does |
 | --- | --- |
-| `import ...tasks.FileAnalyzer;` | **Bug #1 fix.** Brings the sub-package type into scope. |
-| `throws Exception` | **Bug #2 fix.** Satisfies catch-or-specify for `run()`. |
+| `import ...tasks.FileAnalyzer;` | Brings the sub-package type into scope — Java does not import sub-packages implicitly. |
+| `throws Exception` | Required: `run()` is declared `throws Exception`, so `main` must catch or specify. |
 | `new FileAnalyzer(4)` | 4 worker threads for 10 tasks → tasks run in waves of 4. |
 | `analyzer.run()` | Blocking call; returns only after all 10 results are collected. |
 | `"\n Application finished"` | Proof `run()` completed *and* the pool shut down cleanly. |
@@ -255,7 +160,7 @@ file-10.txt     lines=461   Words=4610  Thread=pool-1-thread-3
 
 `lines`/`words` values change on every run — they come from `Math.random()`.
 
-### 3.2 `FileTask.java`
+### 2.2 `FileTask.java`
 
 The unit of work. Implements `Callable<FileResult>`, which is the `Runnable` equivalent that **can
 return a value and can throw a checked exception**.
@@ -302,7 +207,7 @@ public class FileTask implements Callable<FileResult> {
 - **`call()` is the only place state is created**, and `fileName` is `final`. The task holds no
   mutable shared state, so it is safe to run on any thread without synchronization.
 
-### 3.3 `FileResult.java`
+### 2.3 `FileResult.java`
 
 An immutable value object carrying one task's outcome back to the caller.
 
@@ -335,7 +240,7 @@ public class FileResult {
   `record FileResult(String fileName, int lines, int words, String threadName)` plus the custom
   `toString()`. Left as-is — the explicit form shows what a record generates for you.
 
-### 3.4 `FileAnalyzer.java`
+### 2.4 `FileAnalyzer.java`
 
 The orchestrator: owns the pool, submits all tasks, collects all results, shuts down.
 
@@ -411,12 +316,12 @@ ever busy and the pool is pointless — 10 seconds instead of 3.
 
 ---
 
-## 4. Basic Examples
+## 3. Basic Examples
 
 These classes are standalone demos — **`App` does not call them.** The outputs below were captured
 by invoking each `run()` / factory method directly.
 
-### 4.1 `RunnableExample.java`
+### 3.1 `RunnableExample.java`
 
 Submits 10 `Runnable` lambdas (no return value) to a 3-thread pool.
 
@@ -458,7 +363,7 @@ roughly ordered because the tasks are so short that threads free up one at a tim
 thread names appear across all 10 tasks: **threads are reused**, which is the entire economic
 argument for a pool over `new Thread()` per task.
 
-### 4.2 `CallableExample.java`
+### 3.2 `CallableExample.java`
 
 A factory that returns a `Callable<Integer>` rather than running anything itself.
 
@@ -486,9 +391,9 @@ Result = 49
 Note the ordering: `Calculating` is printed by the *worker* thread; `Result = 49` is printed by
 `main` after `future.get()` returns.
 
-### 4.3 `FutureExamle.java`
+### 3.3 `FutureExamle.java`
 
-> Note the filename typo — `FutureExamle`, missing the `p`. Left unchanged (see [§8](#8-remaining-observations-not-changed)).
+> Note the filename typo — `FutureExamle`, missing the `p`. Left unchanged (see [§7](#7-code-observations)).
 
 Demonstrates that `submit()` does not block but `get()` does.
 
@@ -523,15 +428,15 @@ lesson: between `submit()` and `get()` the main thread is free to do real work. 
 when you actually need the value.
 
 Useful `Future` methods not shown here: `isDone()` (non-blocking poll), `cancel(boolean)`,
-`get(timeout, unit)` (see [§6.3](#63-timeoutexamplejava)).
+`get(timeout, unit)` (see [§5.3](#53-timeoutexamplejava)).
 
 ---
 
-## 5. Thread Pool Types
+## 4. Thread Pool Types
 
 Four `Executors` factory methods, side by side.
 
-### 5.1 `FixedThreadPoolExample.java`
+### 4.1 `FixedThreadPoolExample.java`
 
 10 tasks, 3 threads, 2-second sleep each — the clearest demonstration of queueing.
 
@@ -590,7 +495,7 @@ Perfectly visible batching: **3 START → 3 End → 3 START → 3 End → 3 STAR
 1 End**. Four waves at 2 seconds each ≈ 8 seconds total. Tasks 4–10 sat in the queue until a
 thread freed up. `shutdown()` does **not** cancel queued tasks — all 10 still ran.
 
-### 5.2 `CachedThreadPoolExample.java`
+### 4.2 `CachedThreadPoolExample.java`
 
 20 trivial tasks on a pool that grows on demand.
 
@@ -644,7 +549,7 @@ creating threads until the JVM throws `OutOfMemoryError: unable to create new na
 it only for large numbers of short-lived tasks; prefer a fixed or bounded pool otherwise. Idle
 threads are reaped after 60 seconds.
 
-### 5.3 `SingleThreadExecutorExample.java`
+### 4.3 `SingleThreadExecutorExample.java`
 
 One thread — guarantees sequential execution.
 
@@ -679,7 +584,7 @@ Compare with `newFixedThreadPool(1)`: functionally near-identical, but a single-
 wrapped so it cannot be reconfigured to add threads later, and it replaces its worker if one dies
 from an uncaught exception.
 
-### 5.4 `ScheduledExecutorExample.java`
+### 4.4 `ScheduledExecutorExample.java`
 
 Delayed and recurring execution.
 
@@ -736,9 +641,9 @@ The deltas are consistently ~2000 ms, confirming the fixed *rate*. Note periodic
 
 ---
 
-## 6. Advanced Patterns
+## 5. Advanced Patterns
 
-### 6.1 `InvokeAllExample.java`
+### 5.1 `InvokeAllExample.java`
 
 Submit a batch and wait for **all** of it in one call.
 
@@ -784,7 +689,7 @@ Result = 25
 - **Exceptions do not escape `invokeAll`** — a failed task's exception surfaces from *its*
   `future.get()` as an `ExecutionException`. So one bad task will not hide the other results.
 
-### 6.2 `InvokeAnyExample.java`
+### 5.2 `InvokeAnyExample.java`
 
 Race several alternatives; keep the first winner.
 
@@ -819,7 +724,7 @@ First result = Server B
 - **Only the *first successful* completion counts** — a task that throws does not win the race;
   `invokeAny` keeps waiting for a genuine result.
 
-### 6.3 `TimeoutExample.java`
+### 5.3 `TimeoutExample.java`
 
 Bound how long you will wait, and cancel if exceeded.
 
@@ -876,7 +781,7 @@ responds to interruption immediately by throwing `InterruptedException`.
 
 ---
 
-## 7. Concepts Cheat Sheet
+## 6. Concepts Cheat Sheet
 
 ### Pool types
 
@@ -930,16 +835,15 @@ if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
 
 ---
 
-## 8. Remaining Observations (not changed)
+## 7. Code Observations
 
-The task was to fix the bugs in `App.java`, so the following were deliberately **left alone**.
-They are cosmetic or live in other files — listed here for visibility, not applied:
+Rough edges in the current code, listed for visibility. None are applied here:
 
 | File | Observation |
 | --- | --- |
 | `FileAnalyzer.java` | Constructor parameter is spelled `numberOfTheads` (missing `r`). |
 | `FileAnalyzer.java` | If `run()` throws, `shutdown()` is never reached — the pool leaks and the JVM hangs. A `try/finally` around the body would fix it. |
-| `FileAnalyzer.java` | The `boolean` from `awaitTermination` is discarded; a timeout passes unnoticed. The idiom in §7 handles it. |
+| `FileAnalyzer.java` | The `boolean` from `awaitTermination` is discarded; a timeout passes unnoticed. The idiom in §6 handles it. |
 | `FutureExamle.java` | Class/file name typo — should be `FutureExample`. Renaming requires renaming the file too. |
 | `FixedThreadPoolExample.java` | Unused import `java.util.concurrent.Executor`. |
 | `FileTask.java` | `words` is just `lines * 10`, so it carries no independent information. |
